@@ -6,18 +6,15 @@
 ### by Bastiaan van der Wulp & Annemarie Engels
 ### 2024_01_22
 ###
-### This script, :
+### This script, close to intention above :
 ### Martine Jansen
 ### 2024_03_13
 ###
 ################################################################################
 
-### comments on diverting from original script ---------------------------------
+#### comments on diverting from original script --------------------------------
 
-# location of funding files hisbek and vlpbek
-# read in files
-
-
+# Most of the time, original code is given in the comments
 
 
 #### libraries -----------------------------------------------------------------
@@ -25,11 +22,11 @@
 library(tidyverse)
 
 
-### location of funding files hisbek and vlpbek --------------------------------
+#### location of funding files hisbek and vlpbek -------------------------------
 
 # Original script not in project form,
-# files seem to be located in working directory
-# I chose to let the user specify the location for working directory
+# files seem exptected to be located in working directory
+# I chose to let the user specify the location for data directory
 # that includes not being dependent on the specific brin
 
 
@@ -215,27 +212,162 @@ vlphisbek_2025 <- data2025 %>%
 
 #### More SQL ------------------------------------------------------------------
 
-# -- Unieke records voor persoon per studiejaar-brin-opleidingscode-onderwijsvorm
-# SELECT DISTINCT Persoonsnummer, Studiejaar, Brin, opleidingscode, onderwijsvorm INTO
-# dbo.tmp_wisselstroom2025 FROM vlphisbek_2025 WHERE vroegestart = 1
-
 tmp_wisselstroom2025 <- vlphisbek_2025 %>%
+  # -- Unieke records voor persoon per studiejaar-brin-opleidingscode-onderwijsvorm
+  # SELECT DISTINCT Persoonsnummer, Studiejaar, Brin, opleidingscode, onderwijsvorm INTO
+  # dbo.tmp_wisselstroom2025 FROM vlphisbek_2025 WHERE vroegestart = 1
   filter(vroegestart == 1) %>%
   distinct(Persoonsnummer, Studiejaar, Brin, opleidingscode, onderwijsvorm) %>%
-# -- Instroomjaar bij deze brin-opleidingscode-onderwijsvorm
-# ALTER TABLE tmp_wisselstroom2025 ADD Instroomjaar VARCHAR(4)
-# UPDATE tmp_wisselstroom2025 SET Instroomjaar = (
-#   SELECT MIN(Studiejaar) FROM tmp_wisselstroom2025 b
-#   WHERE tmp_wisselstroom2025.Persoonsnummer = b.Persoonsnummer
-#   AND tmp_wisselstroom2025.Brin = b.Brin
-#   AND tmp_wisselstroom2025.opleidingscode = b.opleidingscode
-#   AND tmp_wisselstroom2025.onderwijsvorm = b.onderwijsvorm )
+  # -- Instroomjaar bij deze brin-opleidingscode-onderwijsvorm
+  # ALTER TABLE tmp_wisselstroom2025 ADD Instroomjaar VARCHAR(4)
+  # UPDATE tmp_wisselstroom2025 SET Instroomjaar = (
+  #   SELECT MIN(Studiejaar) FROM tmp_wisselstroom2025 b
+  #   WHERE tmp_wisselstroom2025.Persoonsnummer = b.Persoonsnummer
+  #   AND tmp_wisselstroom2025.Brin = b.Brin
+  #   AND tmp_wisselstroom2025.opleidingscode = b.opleidingscode
+  #   AND tmp_wisselstroom2025.onderwijsvorm = b.onderwijsvorm )
   group_by(Persoonsnummer, Brin, opleidingscode, onderwijsvorm) %>%
   mutate(Instroomjaar = min(Studiejaar)) %>%
-  ungroup() 
+  ungroup() %>%
+  #   -- Hoogste jaar bij de VU
+  # ALTER TABLE tmp_wisselstroom2025 ADD LaatsteJaarVU VARCHAR(4)
+  # UPDATE tmp_wisselstroom2025 SET LaatsteJaarVU = (
+  #   SELECT MAX(Studiejaar) FROM tmp_wisselstroom2025 b
+  #   WHERE tmp_wisselstroom2025.Persoonsnummer = b.Persoonsnummer
+  #  AND b.Brin = '21PL'
+  #  AND tmp_wisselstroom2025.Studiejaar >= b.Studiejaar )
+  #  MMj: changed this to find designated brin_of_interest
+  group_by(Persoonsnummer) %>%
+  arrange(Persoonsnummer, Studiejaar, Brin) %>%
+  mutate(Laatstejaar_brin_of_interest = case_when(Brin == brin_of_interest ~ Studiejaar,
+                                                  TRUE ~ NA_integer_)) %>%
+  fill(Laatstejaar_brin_of_interest) %>%
+  ungroup() %>%
+  #   -- Laatste opleiding bij de VU
+  # ALTER TABLE tmp_wisselstroom2025 ADD LaatsteOpleidingVU VARCHAR(5)
+  # UPDATE tmp_wisselstroom2025 SET LaatsteOpleidingVU = (
+  #   SELECT MAX(opleidingscode) FROM tmp_wisselstroom2025 b
+  #   WHERE tmp_wisselstroom2025.Persoonsnummer = b.Persoonsnummer
+  #   AND b.Brin = '21PL'
+  #   AND tmp_wisselstroom2025.LaatsteJaarVU = b.Studiejaar )
+  # WHERE LaatsteJaarVU IS NOT NULL
+  # MMJ: this saves the maximum code, so master trumps bachelor, within bachelor no real meaning
+  # and of course ad starts with an 8 that trumps master(code starts with 4) as well.
+  # and, since opleidingscode is read as integer, old opleidingsnummers starting with a zero lose the starting zero,
+  # will be regarded higher. of course the zero numbers are masters, so equivalend with 4 now
+  group_by(Persoonsnummer, Studiejaar, Brin) %>%
+  arrange(Persoonsnummer, Studiejaar, Brin) %>%
+  mutate(LaatsteOpleiding_brin_of_interest = case_when(Brin == brin_of_interest ~ max(opleidingscode),
+                                                       TRUE ~ NA_integer_)) %>%
+  ungroup() %>%
+  group_by(Persoonsnummer, Laatstejaar_brin_of_interest) %>%
+  fill(LaatsteOpleiding_brin_of_interest) %>%
+  ungroup() %>%
+  # -- Aantal jaar bij de VU (historie *voor* dit studiejaar)
+  # ALTER TABLE tmp_wisselstroom2025 ADD StudiejarenVU VARCHAR(4)
+  # UPDATE tmp_wisselstroom2025 SET StudiejarenVU = (
+  # SELECT COUNT(DISTINCT(Studiejaar)) FROM tmp_wisselstroom2025 b
+  # WHERE tmp_wisselstroom2025.Persoonsnummer = b.Persoonsnummer
+  # AND b.Brin = '21PL'
+  # AND tmp_wisselstroom2025.Studiejaar > b.Studiejaar )
+  # WHERE LaatsteJaarVU IS NOT NULL
+  group_by(Persoonsnummer, Brin, Studiejaar) %>%
+  arrange(Persoonsnummer, Brin, Studiejaar) %>%
+  mutate(Studiejaren_brin_of_interest = case_when(Brin == brin_of_interest ~ 1,
+                                                      TRUE ~ 0)) %>%
+  ungroup() %>%
+  group_by(Persoonsnummer) %>%
+  arrange(Studiejaar, Brin) %>%
+  mutate(Studiejaren_brin_of_interest = cumsum(Studiejaren_brin_of_interest)) %>%
+  ungroup()
+  
+
+### Some intermediate results --------------------------------------------------
+
+# Following page 17/21 of the VU_HvA doc
+
+# -- Instroom
+# SELECT Studiejaar, COUNT(*) FROM tmp_wisselstroom2025 WHERE brin = '28DN' AND Studiejaar = Instroomjaar
+# GROUP BY Studiejaar ORDER BY Studiejaar
+# MMJ: select amount of rows per studiejaar for own brin
+# MMJ: not really wise for older years, as this gives only historical data about students enrolled in current years
+
+tmp_wisselstroom2025 %>%
+  filter(Brin == brin_vlpbek,
+         Studiejaar == Instroomjaar) %>%
+  count(Studiejaar)
+
+# -- Inschrijvingen
+# SELECT Studiejaar, COUNT(*) FROM tmp_wisselstroom2025 WHERE brin = '28DN' 
+# GROUP BY Studiejaar ORDER BY Studiejaar
+
+tmp_wisselstroom2025 %>%
+  filter(Brin == brin_vlpbek) %>%
+  count(Studiejaar)
+
+
+# -- Telling doorstroom
+# SELECT studiejaar, COUNT(*) FROM tmp_wisselstroom2025 WHERE brin = '28DN' AND studiejaar >= 2021 
+# AND instroomjaar = studiejaar AND LaatstejaarVU < studiejaar AND LaatstejaarVU >= studiejaar - 5 GROUP BY 
+# studiejaar ORDER BY studiejaar
+# MMJ: amount of instroom from brin of interest, with at most 5 years between brin of interest and own brin
+
+tmp_wisselstroom2025 %>%
+  filter(Brin == brin_vlpbek,
+         Studiejaar > 2021,
+         Instroomjaar == Studiejaar,
+         Laatstejaar_brin_of_interest < Studiejaar,
+         Laatstejaar_brin_of_interest >= Studiejaar - 5) %>%
+  count(Studiejaar)
+
 
 # todo (bottom page 16 of VU_HvA doc)
 
+#### Collect all the tmp's in one file -----------------------------------------
 
+# MMJ: cannot do that, since i only have one year of data
+# so I only add one year
+
+# DROP TABLE tmp_wisselstroom
+# SELECT * INTO tmp_wisselstroom FROM tmp_wisselstroom2021 WHERE 
+# brin = '28DN' AND studiejaar IN (2017,2018) AND instroomjaar = studiejaar AND LaatstejaarVU < studiejaar AND LaatstejaarVU >= studiejaar - 5
+# INSERT INTO tmp_wisselstroom SELECT * FROM tmp_wisselstroom2022 WHERE
+# brin = '28DN' AND studiejaar = 2019 AND instroomjaar = studiejaar AND LaatstejaarVU < studiejaar AND LaatstejaarVU >= studiejaar - 5
+# INSERT INTO tmp_wisselstroom SELECT * FROM tmp_wisselstroom2023 WHERE
+# brin = '28DN' AND studiejaar = 2020 AND instroomjaar = studiejaar AND LaatstejaarVU < studiejaar AND LaatstejaarVU >= studiejaar - 5
+# INSERT INTO tmp_wisselstroom SELECT * FROM tmp_wisselstroom2024 WHERE
+# brin = '28DN' AND studiejaar = 2021 AND instroomjaar = studiejaar AND LaatstejaarVU < studiejaar AND LaatstejaarVU >= studiejaar - 5
+# INSERT INTO tmp_wisselstroom SELECT * FROM tmp_wisselstroom2025 WHERE
+# brin = '28DN' AND studiejaar IN (2022,2023) AND instroomjaar = studiejaar AND LaatstejaarVU < studiejaar AND LaatstejaarVU >= studiejaar - 5
   
-  
+tmp_wisselstroom <- bind_rows(
+  tmp_wisselstroom2025 %>% filter(Brin == brin_vlpbek,
+                                  Instroomjaar == Studiejaar,
+                                  Laatstejaar_brin_of_interest < Studiejaar,
+                                  Laatstejaar_brin_of_interest >= Studiejaar - 5)
+)  
+
+#### Make selection for excel --------------------------------------------------
+
+# -- Selectie voor draaitabel Excel
+# SELECT opleidingscode,onderwijsvorm,Instroomjaar,LaatsteJaarVU,LaatsteOpleidingVU,StudiejarenVU,COUNT(*) AS Aantal
+# FROM tmp_wisselstroom
+# GROUP BY opleidingscode,onderwijsvorm,Instroomjaar,LaatsteJaarVU,LaatsteOpleidingVU,StudiejarenVU
+
+data_for_excel <- tmp_wisselstroom %>%
+  count(opleidingscode, onderwijsvorm, Instroomjaar, Laatstejaar_brin_of_interest,
+        LaatsteOpleiding_brin_of_interest, Studiejaren_brin_of_interest)
+
+####  Enrich SQL dataset in excel ----------------------------------------------
+
+data_for_excel %>%
+  # [Tussenjaren] = [Instroomjaar] -/- [LaatstejaarVU] -/- 1
+  mutate(Tussenjaren= Instroomjaar - Laatstejaar_brin_of_interest - 1) %>%
+  # [Directe Doorstroom] = IF [Tussenjaren] = 0 THEN ‘JA’ ELSE ‘NEE’
+  mutate(`Directe Doorstroom` = ifelse(Tussenjaren == 0,
+                                       "ja",
+                                       "nee"))
+
+# Voeg de omschrijvingen bijbehorend bij het croho/ isat code toe
+# MMJ: this can be done via a left_join with a table containing the data
+# i did not do that here, since no code for it in the VU_HvA doc
